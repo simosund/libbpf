@@ -6093,6 +6093,8 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 			ext = &obj->externs[relo->ext_idx];
 			insn[0].src_reg = BPF_PSEUDO_KFUNC_CALL;
 			if (ext->is_set) {
+				pr_debug("%s: ksym=%s with btf_id=%d and module BTF idx %d\n",
+					 __func__, ext->name, ext->ksym.kernel_btf_id, ext->ksym.btf_fd_idx);
 				insn[0].imm = ext->ksym.kernel_btf_id;
 				insn[0].off = ext->ksym.btf_fd_idx;
 			} else { /* unresolved weak kfunc call */
@@ -6119,6 +6121,10 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 				prog->name, i, relo->type);
 			return -EINVAL;
 		}
+
+		pr_debug("%s: relo_type=%d, insn_idx=%d, code=%u, dst=%u, src=%u, off=%d, imm=%d\n",
+			 __func__, relo->type, relo->insn_idx, BPF_OP(insn[0].code), insn[0].dst_reg,
+			 insn[0].src_reg, insn[0].off, insn[0].imm);
 	}
 
 	return 0;
@@ -7398,6 +7404,25 @@ static int libbpf_prepare_prog_load(struct bpf_program *prog,
 
 static void fixup_verifier_log(struct bpf_program *prog, char *buf, size_t buf_sz);
 
+static int debug_print_insns_call_kfunc(const struct bpf_program *prog)
+{
+	struct bpf_insn *insn;
+	int i;
+
+	for (i = 0; i < prog->insns_cnt; i++) {
+		insn = &prog->insns[i];
+		if (BPF_OP(insn->code) != BPF_CALL ||
+		    insn->src_reg != BPF_PSEUDO_KFUNC_CALL)
+			continue;
+
+		pr_debug("%s: prog=%s, insn_idx=%d, code=%u, dst=%u, src=%u, off=%d, imm=%d\n",
+			 __func__, prog->name, i, BPF_OP(insn->code),
+			 insn->dst_reg, insn->src_reg, insn->off, insn->imm);
+	}
+
+	return 0;
+}
+
 static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog,
 				struct bpf_insn *insns, int insns_cnt,
 				const char *license, __u32 kern_version, int *prog_fd)
@@ -7485,6 +7510,9 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 		*prog_fd = -1;
 		return 0;
 	}
+
+	// Check state of insns just before loading into kernel
+	debug_print_insns_call_kfunc(prog);
 
 retry_load:
 	/* if log_level is zero, we don't request logs initially even if
